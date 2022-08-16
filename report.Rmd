@@ -1,0 +1,384 @@
+---
+title: "Thematic network analyses of IND's PER group's research blurps"
+author: "Jesper Bruun"
+date: "`r Sys.Date()`"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tm)
+library(igraph)
+library(stringi)
+library(xlsx)
+source("functions/backboneExtraction.R")
+source("functions/mywordnetwork.r")
+source("functions/makemap.r")
+source("functions/graphModules.r")
+source("functions/loads.r")
+```
+
+## Selection of texts
+I have used the blurps we prepared in the spring of 2022. 
+
+
+## Selection and translation
+I have not selected research questions nor example publications, but only descriptions of our research.
+
+## Method
+See Bruun et al (2019), Bruun et al (2021) and Mariegaard et al (2022) for descriptions of method. Below we describe our workflow for this report.  
+
+## Load data
+Each blurp was converted to unformatted .txt files. We load the these files to begin the process:
+```{r load data, echo=T}
+texts <-VCorpus(DirSource("data", encoding = "UTF-8"), readerControl = list(language = "eng"))
+```
+
+
+#Preprocess texts and make networks
+Academic texts use a lot of modifiers to their claims. Also, namedropping and the curious practice of mentioning the nationality and occupation of some authors that are referenced. These things are deleted, since they are not important for understanding the texts' connections. Furthermore, they may form false connections between texts; just because two academic text contain the word "might" (a modifier), it does not mean that the texsts are very similar. 
+```{r pre-process,echo=T}
+pptexts<-tm_map(texts,tolower)
+pptexts<-tm_map(pptexts,removePunctuation)
+pptexts<-tm_map(pptexts,stripWhitespace)
+wordstoremove<-c(stopwords("english"),"can","also","although","may","maybe","moreover",
+"mostly","onto","per se", "really","therefore","though","thus","behaving",
+"said","complete","completely","done","famous", "every", "far","following","box","found","fourth",
+"france", "highly","hitherto","important","importance","mentions","might","much","must","namely","necessary",
+"next", "often","one","ones","put","several","similar","since","socalled","summary","three", "two", 
+"typical","us","usually","view","virtue","well","whereas","whether","whose","within","different")
+
+
+pptexts<-tm_map(pptexts,stripWhitespace)
+#Here, we call a script, which will do the substitutions and reductions we want
+source("scripts/substitutions.r")
+
+
+pptexts<-tm_map(pptexts,stripWhitespace)
+edgelistTexts<-list()
+for(i in 1:length(pptexts)){
+  edgelistTexts[[i]]<-myWordNetwork(pptexts[[i]],j.words=wordstoremove)
+}
+
+
+
+#making networks
+networkTexts<-list()
+for (i in 1:length(pptexts)){
+  networkTexts[[i]]<-graph.edgelist(edgelistTexts[[i]],directed=T)
+  E(networkTexts[[i]])$weight<-1
+  networkTexts[[i]]<-simplify(networkTexts[[i]],remove.multiple=T,remove.loops=T,edge.attr.comb=list(weight="sum"))
+
+} 
+ 
+forCollectedEdgelist<-list()
+for (i in 1:length(networkTexts)){
+  forCollectedEdgelist[[i]]<-get.edgelist(networkTexts[[i]])
+} 
+
+
+collectedEdgelist<-do.call(rbind,forCollectedEdgelist)
+
+
+collectedNetwork<-graph.edgelist(collectedEdgelist,directed=T)
+E(collectedNetwork)$weight<-1
+collectedNetwork<-simplify(collectedNetwork,remove.multiple=T,remove.loops=T,edge.attr.comb=list(weight="sum"))
+
+PR<-page.rank(collectedNetwork)
+S<-strength(collectedNetwork,mode = "all")
+degree<-degree(collectedNetwork)
+
+V(collectedNetwork)$PR<-PR$vector
+V(collectedNetwork)$strength<-S
+V(collectedNetwork)$degree<-degree
+
+```
+## Indicate which nodes in single network are part of combined network
+
+```{r subgraphs, echo=FALSE}
+#bildungPart<- collectedNetwork %s% collectedBildungNetwork
+#competencePart<- collectedNetwork %s% collectedCompetenceNetwork
+
+
+#nodesBildungPart<-as.numeric(degree(bildungPart)>0)
+#nodesCompetencePart<-as.numeric(degree(competencePart)>0)
+
+#V(collectedNetwork)$bildungWords<-nodesBildungPart
+#V(collectedNetwork)$competenceWords<-nodesCompetencePart
+
+V(collectedNetwork)$id<-V(collectedNetwork)$name
+```
+
+## Make backbone networks
+```{r make-BB, echo=TRUE}
+collectedNetworkBB<-backboneNetwork(collectedNetwork,0.05,1) #when replacements have been made, this may become 
+collectedBildungNetworkBB<-backboneNetwork(collectedBildungNetwork,0.01,1)
+collectedCompetenceNetworkBB<-backboneNetwork(collectedCompetenceNetwork,0.01,1)
+V(collectedNetworkBB)$bildungWords<-V(collectedNetwork)$bildungWords
+V(collectedNetworkBB)$competenceWords<-V(collectedNetwork)$competenceWords
+
+```
+
+## Write backbone networks for modular solutions
+```{r write-bb-mod, echo=TRUE}
+write.graph(collectedNetworkBB, "networks/networksForInfomap/collectedNetworkBB.net",format="pajek")
+```
+
+## Finding module solutions
+The following code makes use of igraphs built-in fast-greedy modularity optimization. We will use informap, as it preserves directionality, but include the code here for interested readers. 
+```{r fast-greedy, eval=FALSE, echo=TRUE}
+#find a membership solution for collected networks
+mem<-fastgreedy.community(as.undirected(collectedNetwork)) #fast and greedy may not be optimal due to undirectedness
+#memIM<-infomap.community(collectedNetwork) #igraphs version of infomap may not be optimal
+memBB<-fastgreedy.community(as.undirected(collectedNetworkBB)) #fast and greedy may not be optimal due to undirectedness
+
+#find a membership solution for competence networks
+memC<-fastgreedy.community(as.undirected(collectedCompetenceNetwork)) #fast and greedy may not be optimal due to undirectedness
+#memIM<-infomap.community(collectedNetwork) #igraphs version of infomap may not be optimal
+memCBB<-fastgreedy.community(as.undirected(collectedCompetenceNetworkBB)) #fast and greedy may not be optimal due to undirectedness
+
+#find a membership solution for competence networks
+memB<-fastgreedy.community(as.undirected(collectedBildungNetwork)) #fast and greedy may not be optimal due to undirectedness
+#memIM<-infomap.community(collectedNetwork) #igraphs version of infomap may not be optimal
+memBBB<-fastgreedy.community(as.undirected(collectedBildungNetworkBB)) #fast and greedy may not be optimal due to undirectedness
+```
+
+
+## Execute shell script for finding Infomap solutions
+```{zsh run-infomap, eval=FALSE, echo = FALSE}
+for i in {1..1000};do ./Infomap --clu --ftree -d networks/networksForInfomap/collectedNetworkBB.net --out-name sol$i infomapSolutions/collected;done;
+
+for i in {1..1000};do ./Infomap --clu --ftree -d networks/networksForInfomap/collectedBildungNetworkBB.net --out-name sol$i infomapSolutions/bildung;done;
+
+for i in {1..1000};do ./Infomap --clu --ftree -d networks/networksForInfomap/collectedCompetenceNetworkBB.net --out-name sol$i infomapSolutions/competence;done;
+
+```   
+
+## Find most frequent solution
+```{r find-freq, echo=TRUE}
+n<-10
+#######COLLECTED NETWORK#######
+solM<-matrix(0,nrow=vcount(collectedNetworkBB),ncol=n)
+for (i in 1:n){
+  sol<-read.csv(paste0("infomapSolutions/collected/sol",i,".clu"),skip=8,sep=" ")
+  names(sol)<-c("node","membership","flow","NA")
+  sol<-sol[,-4]
+  sol <- sol[order(sol$node),]
+  solM[,i]<-sol$membership
+}
+nmiM<-matrix(NA,nrow=n,ncol=n)
+
+compareNMI<-function(solmat,k){
+result<-vector()
+for(i in 1:n){
+result[i]<-compare(solmat[,k],solmat[,i],method="nmi")
+}
+  return(result)
+}
+for(j in 1:n){
+  nmiM[j,]<-compareNMI(solM,j)
+}
+#The mean normalized mutual information
+mean(nmiM)
+#finding the most common solution
+no<-vector()
+for(l in 1:n){
+no[l]<-length(which(nmiM[l,]==1))
+}
+
+#######BILDUNG NETWORK#######
+solMB<-matrix(0,nrow=vcount(collectedBildungNetworkBB),ncol=n)
+for (i in 1:n){
+  sol<-read.csv(paste0("infomapSolutions/bildung/sol",i,".clu"),skip=8,sep=" ")
+  names(sol)<-c("node","membership","flow","NA")
+  sol<-sol[,-4]
+  sol <- sol[order(sol$node),]
+  solMB[,i]<-sol$membership
+}
+nmiMB<-matrix(NA,nrow=n,ncol=n)
+
+for(j in 1:n){
+  nmiMB[j,]<-compareNMI(solMB,j)
+}
+#The mean normalized mutual information
+mean(nmiMB)
+#finding the most common solution
+noB<-vector()
+for(l in 1:n){
+noB[l]<-length(which(nmiMB[l,]==1))
+}
+
+#######COMPETENCE NETWORK#######
+solMC<-matrix(0,nrow=vcount(collectedCompetenceNetworkBB),ncol=n)
+for (i in 1:n){
+  sol<-read.csv(paste0("infomapSolutions/competence/sol",i,".clu"),skip=8,sep=" ")
+  names(sol)<-c("node","membership","flow","NA")
+  sol<-sol[,-4]
+  sol <- sol[order(sol$node),]
+  solMC[,i]<-sol$membership
+}
+nmiMC<-matrix(NA,nrow=n,ncol=n)
+
+for(j in 1:n){
+  nmiMC[j,]<-compareNMI(solMC,j)
+}
+#The mean normalized mutual information
+mean(nmiMC)
+#finding the most common solution
+noC<-vector()
+for(l in 1:n){
+noC[l]<-length(which(nmiMC[l,]==1))
+}
+
+
+which.max(no)
+which.max(noC)
+which.max(noB)
+```
+## Select solution
+From the analysis above, we find the 
+
+```{r select-solution, echo=TRUE}
+
+
+memBB<-read.csv(paste0("infomapSolutions/collected/sol",which.max(no),".clu"),skip=8,sep=" ")
+names(memBB)<-c("node","membership","flow","NA")
+memBB<-memBB[,-4]
+memBB <- memBB[order(memBB$node),]
+
+#find a membership solution for competence networks
+memCBB<-read.csv(paste0("infomapSolutions/competence/sol",which.max(noC),".clu"),skip=8,sep=" ")
+names(memCBB)<-c("node","membership","flow","NA")
+memCBB<-memCBB[,-4]
+memCBB <- memCBB[order(memCBB$node),]
+
+#find a membership solution for competence networks
+memBBB<-read.csv(paste0("infomapSolutions/bildung/sol",which.max(noB),".clu"),skip=8,sep=" ")
+names(memBBB)<-c("node","membership","flow","NA")
+memBBB<-memBBB[,-4]
+memBBB <- memBBB[order(memBBB$node),]
+```
+
+## Making a map of bildung and competencies
+```{r make-map, echo=TRUE}
+#Use infomap membership file
+collectedMap<-makemap(memBB$membership,collectedNetworkBB)
+collectedMapBB<-backboneNetwork(collectedMap,0.001,1)
+V(collectedMapBB)$n_words<-V(collectedMap)$n_words
+V(collectedMapBB)$internallinks<-V(collectedMap)$internallinks
+
+#consider running infomap as api or just "by hand"
+collectedMapC<-makemap(memCBB$membership,collectedCompetenceNetworkBB)
+collectedMapCBB<-backboneNetwork(collectedMapC,0.001,1)
+V(collectedMapCBB)$n_words<-V(collectedMapC)$n_words
+V(collectedMapCBB)$internallinks<-V(collectedMapC)$internallinks
+
+#consider running infomap as api or just "by hand"
+collectedMapB<-makemap(memBBB$membership,collectedBildungNetworkBB)
+collectedMapBBB<-backboneNetwork(collectedMapB,0.001,1)
+V(collectedMapBBB)$n_words<-V(collectedMapB)$n_words
+V(collectedMapBBB)$internallinks<-V(collectedMapB)$internallinks
+
+write.graph(collectedMapBB,"networks/networksForInfomap/collectedMapBB.net",format="pajek")
+write.graph(collectedMapBBB,"networks/networksForInfomap/collectedMapBBB.net",format="pajek")
+write.graph(collectedMapCBB,"networks/networksForInfomap/collectedMapCBB.net",format="pajek")
+
+#Create module networks for collected network
+modulesCollected<-graphModules(collectedNetwork,memBB$membership) 
+for(i in 1:length(unique(memBB$membership))){
+write.graph(modulesCollected[[i]], paste0("networks/moduleNetworks/collected/M",i,"_", format(Sys.time(), "%d-%b-%H"), ".graphml"),format="graphml")
+}
+
+#Create module networks for bildung network
+modulesCollectedB<-graphModules(collectedBildungNetworkBB,memBBB$membership) 
+for(i in 1:length(unique(memBBB$membership))){
+write.graph(modulesCollectedB[[i]], paste0("networks/moduleNetworks/bildung/MB",i,"_", format(Sys.time(), "%d-%b-%H"), ".graphml"),format="graphml")
+}
+
+#Create module networks for competence network
+modulesCollectedC<-graphModules(collectedCompetenceNetworkBB,memCBB$membership) 
+for(i in 1:length(unique(memCBB$membership))){
+write.graph(modulesCollectedC[[i]], paste0("networks/moduleNetworks/competence/MC",i,"_", format(Sys.time(), "%d-%b-%H"), ".graphml"),format="graphml")
+}
+
+```
+## Finding out how much each text loads on modules in map
+```{r loads, echo=FALSE}
+#Find out how much bildung texts and competence texts load on each module
+networkTexts2<-list(collectedBildungNetwork,collectedCompetenceNetwork)
+loadsTextsOnCollectedNetwork<-list()
+for(i in 1:2){
+loadsTextsOnCollectedNetwork[[i]]<-loads(i,networkTexts2,memBB$membership,modulesCollected)
+}
+wordLoadMatrix<-matrix(0,nrow=2,ncol=length(unique(memBB$membership)))
+linkLoadMatrix<-matrix(0,nrow=2,ncol=length(unique(memBB$membership)))
+
+for(j in 1:length(networkTexts2)){
+  wordLoadMatrix[j,]<-loadsTextsOnCollectedNetwork[[j]][,1]
+ linkLoadMatrix[j,]<-loadsTextsOnCollectedNetwork[[j]][,2]
+}
+
+delta_word<-wordLoadMatrix[1,]-wordLoadMatrix[2,]+1 #Bildung-Competence0+1;
+#0 means completely Competence, 1 means equal parts, 2 means completely Bildung
+V(collectedMapBB)$delta_word<-delta_word
+delta_link<-linkLoadMatrix[1,]-linkLoadMatrix[2,]+1 #Bildung-Competence0+1;
+
+V(collectedMapBB)$delta_link<-delta_link
+#0 means completely Competence, 1 means equal parts, 2 means completely Bildung
+
+```
+## Heatmaps
+```{r outputs, echo=T}
+#Heatmap
+colnames(wordLoadMatrix) <- paste("M", 1:length(unique(memBB$membership)), sep="")
+rownames(wordLoadMatrix) <- c("Bildung","Competence")
+m<-round(wordLoadMatrix,digits = 1)
+
+colnames(linkLoadMatrix) <- paste("M", 1:length(unique(memBB$membership)), sep="")
+rownames(linkLoadMatrix) <- c("Bildung","Competence")
+q<-round(linkLoadMatrix,digits = 1)
+
+image(1:ncol(m), 1:nrow(m), t(m), col = rev(heat.colors(60)), axes = FALSE)
+axis(1, 1:ncol(m), colnames(m))
+axis(2, 1:nrow(m), rownames(m))
+for (x in 1:ncol(m))
+ for (y in 1:nrow(m))
+   text(x, y, m[y,x])
+
+
+```
+
+```{r write-csv, echo=T}
+#writing word lists
+write.csv(V(collectedNetwork)$name, paste0("networks/collectedWordlist", format(Sys.time(), "%d-%b-%Y %H.%M"), ".csv"))
+
+write.xlsx(V(collectedNetwork)$name, paste0("networks/collectedWordlist", format(Sys.time(), "%d-%b-%Y %H.%M"), ".xlsx"))
+
+
+```
+#writing graphs
+```{r write-graphs, echo=T}
+
+write.graph(collectedNetwork, paste0("networks/collectedNetwork", format(Sys.time(), "%d-%b-%Y-%H-%M"), ".graphml"),format="graphml")
+
+
+write.graph(collectedBildungNetworkBB, paste0("networks/collectedBildungNetworkBB", format(Sys.time(), "%d-%b-%Y-%H-%M"), ".graphml"),format="graphml")
+
+
+write.graph(collectedCompetenceNetworkBB, paste0("networks/collectedCompetenceNetworkBB", format(Sys.time(), "%d-%b-%Y-%H-%M"), ".graphml"),format="graphml")
+
+
+write.graph(collectedNetworkBB, paste0("networks/collectedNetworkBB", format(Sys.time(), "%d-%b-%Y-%H-%M"), ".graphml"),format="graphml")
+
+
+write.graph(collectedMapBB, paste0("networks/collectedMapBB", format(Sys.time(), "%d-%b-%Y-%H-%M"), ".graphml"),format="graphml")
+
+write.graph(collectedMapBB,"networks/networksForInfomap/collectedMapBB.net",format="pajek")
+```
+
+# Todo
+- calc NMI and make co-module matrix
+- make module networks
+- make name modules
+- heatmaps
+
